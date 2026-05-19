@@ -197,8 +197,8 @@ pivot = agg.pivot_table(
     fill_value=0
 )
 
-# 선택된 제품만, 우선순위 순서 유지
-show_cols = [p for p in selected_products if p in pivot.columns]
+# [수정] 선택된 제품 중 상위(앞의) 11개 제품만 슬라이싱하여 선택
+show_cols = [p for p in selected_products if p in pivot.columns][:11]
 pivot = pivot[show_cols]
 
 pivot = pivot.merge(
