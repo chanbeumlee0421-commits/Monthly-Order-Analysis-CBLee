@@ -17,7 +17,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("동물병원 주문 현황 분류 대시보드")
-st.caption("Raw 탭 엑셀 파일을 업로드하면 자동으로 분석됩니다.")
 st.caption("사이트 개발 : 이찬범")
 st.divider()
 
