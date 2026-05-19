@@ -4,7 +4,7 @@ import plotly.express as px
 from datetime import date, timedelta
 
 st.set_page_config(
-    page_title="경보제약 월별 주문 분석",
+    page_title="동물병원 주문 현황 분류 대시보드",
     page_icon="💊",
     layout="wide"
 )
@@ -16,8 +16,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("경보제약 동물병원 월별 주문 분석")
+st.title("동물병원 주문 현황 분류 대시보드")
 st.caption("Raw 탭 엑셀 파일을 업로드하면 자동으로 분석됩니다.")
+st.caption("사이트 개발 : 이찬범")
 st.divider()
 
 uploaded = st.file_uploader("📂 엑셀 파일 업로드 (경보제약_dashboard.xlsx)", type=["xlsx"])
