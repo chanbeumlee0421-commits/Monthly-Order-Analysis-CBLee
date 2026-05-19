@@ -1,215 +1,315 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.express as px
+from datetime import date, timedelta
 
-st.set_page_config(page_title="CB LEE 동물병원 주문 현황", layout="wide")
-st.title("동물병원 주문 현황 분류")
-st.caption("동물병원 주문처")
+st.set_page_config(
+    page_title="경보제약 월별 주문 분석",
+    page_icon="💊",
+    layout="wide"
+)
 
-st.sidebar.markdown("""
-### 그룹 분류 기준
+st.markdown("""
+<style>
+    .stMetric { background-color: white; padding: 16px; border-radius: 10px; border: 1px solid #e9ecef; }
+    div[data-testid="stMetricValue"] { font-size: 1.6rem; font-weight: 700; }
+</style>
+""", unsafe_allow_html=True)
 
-**🚀 성장**
-- 최근 6개월 매출이 이전 6개월 대비 20% 이상 증가
-- 단, 이전 6개월 매출이 50만원 이상인 경우만 계산
+st.title("경보제약 동물병원 월별 주문 분석")
+st.caption("Raw 탭 엑셀 파일을 업로드하면 자동으로 분석됩니다.")
+st.divider()
 
-**🟢 안심**
-- 누적매출 1000만원↑ + 구매 10회↑ + 주문지체율 2.0 이하
-- 또는 누적매출 3000만원↑ + 구매 3회↑ + 주문지체율 2.0 이하
+uploaded = st.file_uploader("📂 엑셀 파일 업로드 (경보제약_dashboard.xlsx)", type=["xlsx"])
 
-**⚠️ 주의**
-- 누적매출 500만원↑ + 구매 5회↑
-- + 주문지체율 1.5 초과
-- + 최근 6개월 매출 감소(-30% 이하) 또는 최근 6개월 매출 0
+if uploaded is None:
+    st.info("👆 위에서 엑셀 파일을 업로드해 주세요.")
+    st.stop()
 
-**😐 보통**
-- 위 조건에 해당하지 않는 거래처
+@st.cache_data
+def load_data(file):
+    df = pd.read_excel(file, sheet_name="Raw")
+    df = df[df["유통"] == "직거래"].copy()
+    df["매출일"] = pd.to_datetime(df["매출일(배송완료일)"], errors="coerce")
+    df = df.dropna(subset=["매출일"])
+    df["매출수량"] = pd.to_numeric(df["매출수량"], errors="coerce").fillna(0)
+    df["매출액"] = pd.to_numeric(df["매출액(vat 포함)"], errors="coerce").fillna(0)
+    df["제품명"] = df["제품명"].fillna("기타")
+    df["담당자"] = df["담당자"].fillna("미지정")
+    return df
 
-**💤 비활성화**
-- 365일 이상 미구매 + 누적매출 1000만원 미만
-- 또는 365일 이상 미구매 + 구매 3회 이하
+df = load_data(uploaded)
 
----
-### 지표 설명
+all_hospitals = sorted(df["거래처명"].dropna().unique().tolist())
+all_managers  = sorted(df["담당자"].dropna().unique().tolist())
 
-**주문지체율**
-평균 구매 주기 대비 현재 미구매일수 비율
-- 1.0 = 평균 주기에 맞게 오고 있음
-- 1.5 = 평균보다 1.5배 늦어짐
-- 2.0 = 평균의 2배 지남 (많이 늦어진 상태)
+# 우선순위 제품명 순서
+PRIORITY = [
+    "티스템 펫 2mL",
+    "티스템 크림펫 30g",
+    "티스템 크림펫 10g * 10개입",
+    "레나크린 120캡슐",
+    "레나톡스캅",
+    "바이오플로라 300g",
+    "벳에이다 플러스",
+    "벳에이다 테이스티",
+    "벳에이다 하이포",
+    "벳에이다 카디오",
+    "제로디 55g (5.5g x 10ea)",
+    "제로디 55g(5.5gx10ea)",
+    "모보플렉스 2g 정 X 30정/통",
+    "이지앱",
+    "듀라하트 SR-3 주사액(목시덱틴) 6mL 6V (분말부3V, 희석액 3V)",
+]
 
-**반기추세**
-최근 6개월 매출을 이전 6개월과 비교한 변화율
-이전 6개월 매출이 50만원 미만이면 - 로 표시
+all_products_raw = df["제품명"].dropna().unique().tolist()
+priority_products = [p for p in PRIORITY if p in all_products_raw]
+rest_products = sorted([p for p in all_products_raw if p not in PRIORITY])
+all_products = priority_products + rest_products
 
-**기준일**
-파일 업로드하는 당일 자동 적용
-""")
+min_date = df["매출일"].min().date()
+max_date = df["매출일"].max().date()
+today    = date.today()
 
-uploaded = st.file_uploader("Raw 엑셀 파일 업로드", type=["xlsx"])
+with st.sidebar:
+    st.header("🔍 필터 설정")
 
-if uploaded:
-    df = pd.read_excel(uploaded, sheet_name="Raw")
-    df_d = df[
-        (df['거래구분'] == '신규처') &
-        (df['거래처명'].notna())
+    st.subheader("📅 주문 기간")
+    d_col1, d_col2, d_col3 = st.columns([5, 5, 3])
+    with d_col1:
+        start_date = st.date_input("시작일", value=date(2024, 1, 1),
+                                   min_value=min_date, max_value=max_date)
+    with d_col3:
+        use_today = st.checkbox("오늘", value=False)
+    with d_col2:
+        if use_today:
+            end_date = min(today, max_date)
+            st.date_input("종료일", value=end_date, disabled=True)
+        else:
+            end_date = st.date_input("종료일", value=date(2024, 12, 31),
+                                     min_value=min_date, max_value=max_date)
+
+    st.subheader("👤 담당자")
+    selected_managers = st.multiselect(
+        "담당자 선택 (미선택 시 전체)",
+        options=all_managers,
+        placeholder="담당자를 선택하세요..."
+    )
+
+    st.subheader("🏥 동물병원")
+    selected_hospitals = st.multiselect(
+        "병원 선택 (미선택 시 전체)",
+        options=all_hospitals,
+        placeholder="병원명을 검색하거나 선택하세요..."
+    )
+
+    # 기간 + 담당자 + 병원 조건 모두 반영해서 실제 거래된 제품만 표시
+    filtered_df = df[
+        (df["매출일"].dt.date >= start_date) &
+        (df["매출일"].dt.date <= end_date)
     ].copy()
-    df_d['매출일(배송완료일)'] = pd.to_datetime(df_d['매출일(배송완료일)'], errors='coerce')
-    df_d = df_d[df_d['매출일(배송완료일)'].notna()]
-    df_d = df_d.sort_values(['거래처명', '매출일(배송완료일)'])
+    if selected_managers:
+        filtered_df = filtered_df[filtered_df["담당자"].isin(selected_managers)]
+    if selected_hospitals:
+        filtered_df = filtered_df[filtered_df["거래처명"].isin(selected_hospitals)]
+    available_products_raw = filtered_df["제품명"].dropna().unique().tolist()
+    available_products = [p for p in all_products if p in available_products_raw]
 
-    ref_date = pd.Timestamp.today().normalize()
-    cut6  = ref_date - pd.DateOffset(months=6)
-    cut12 = ref_date - pd.DateOffset(months=12)
+    st.subheader("💊 품목")
+    col_all, col_syringe = st.columns(2)
+    with col_all:
+        select_all = st.checkbox("전체 선택", value=True)
+    with col_syringe:
+        exclude_syringe = st.checkbox("주사기 제외", value=False)
 
-    # ── 피처 생성 ──────────────────────────────────────
-    g = df_d.groupby('거래처명')
-    features = pd.DataFrame({
-        '첫구매일'   : g['매출일(배송완료일)'].min(),
-        '마지막구매일': g['매출일(배송완료일)'].max(),
-        '총구매횟수'  : g['매출일(배송완료일)'].count(),
-        '구매제품수'  : g['품명요약2'].nunique(),
-        '누적매출액'  : g['매출액(vat 제외)'].sum(),
-        '담당자'     : g['담당자'].last(),
-        '지역'       : g['지역1'].last(),
-    }).reset_index()
+    syringe_keywords = ["syringe", "주사기"]
+    non_syringe = [
+        p for p in available_products
+        if not any(k in p.lower() for k in syringe_keywords)
+    ]
+    base_list = non_syringe if exclude_syringe else available_products
 
-    features['활동기간_일']   = (features['마지막구매일'] - features['첫구매일']).dt.days.fillna(0)
-    features['미구매일수']    = (ref_date - features['마지막구매일']).dt.days.fillna(999)
-    features['평균구매주기']  = features['활동기간_일'] / features['총구매횟수'].replace(0, 1)
-    features['주문지체율']    = features['미구매일수'] / features['평균구매주기'].replace(0, 1)
-    features['회당매출']      = features['누적매출액'] / features['총구매횟수'].replace(0, 1)
+    if select_all:
+        selected_products = base_list
+    else:
+        selected_products = st.multiselect(
+            "제품명 선택",
+            options=base_list,
+            default=base_list
+        )
 
-    # ── 반기 매출 ──────────────────────────────────────
-    def half_rev(vet):
-        d      = df_d[df_d['거래처명'] == vet]
-        recent = d[d['매출일(배송완료일)'] >  cut6]['매출액(vat 제외)'].sum()
-        prev   = d[(d['매출일(배송완료일)'] >  cut12) &
-                   (d['매출일(배송완료일)'] <= cut6)]['매출액(vat 제외)'].sum()
-        return recent, prev
+# ── 필터링 ────────────────────────────────────────────
+mask = (
+    (df["매출일"].dt.date >= start_date) &
+    (df["매출일"].dt.date <= end_date) &
+    (df["제품명"].isin(selected_products))
+)
+if selected_managers:
+    mask &= df["담당자"].isin(selected_managers)
+if selected_hospitals:
+    mask &= df["거래처명"].isin(selected_hospitals)
 
-    # ── 주요제품 ──────────────────────────────────────
-    def top3_products(vet):
-        d   = df_d[df_d['거래처명'] == vet]
-        top = d.groupby('품명요약2')['매출수량'].sum().sort_values(ascending=False).head(3)
-        return ' / '.join([f"{p} {int(q)}개" for p, q in top.items()])
+fdf = df[mask].copy()
 
-    with st.spinner("거래처 분석 중..."):
-        half = features['거래처명'].apply(
-            lambda x: pd.Series(half_rev(x), index=['최근반기', '이전반기']))
-        features['최근반기'] = half['최근반기'].values
-        features['이전반기'] = half['이전반기'].values
-        features['반기추세'] = features.apply(
-            lambda r: (r['최근반기'] - r['이전반기']) / r['이전반기']
-            if r['이전반기'] >= 500_000 else None, axis=1)
-        features['주요제품'] = features['거래처명'].apply(top3_products)
+if fdf.empty:
+    st.warning("⚠️ 선택한 조건에 맞는 데이터가 없습니다. 필터를 조정해주세요.")
+    st.stop()
 
-    # ── 그룹 분류 ──────────────────────────────────────
-    def assign_group(row):
-        cnt      = row['총구매횟수']
-        ratio    = row['주문지체율']
-        revenue  = row['누적매출액']
-        trend    = row['반기추세']
-        recent6  = row['최근반기']
-        prev6    = row['이전반기']
-        inactive = row['미구매일수']
-        duration = row['활동기간_일']
-        on_track = ratio < 1.5
+delta_days = (end_date - start_date).days + 1
+months = max(delta_days / 30.44, 0.1)
 
-        # 1순위: 💤 비활성화
-        if inactive >= 365 and revenue < 10_000_000:
-            return '💤 비활성화'
-        if inactive >= 365 and cnt <= 3:
-            return '💤 비활성화'
+# ── 집계 ─────────────────────────────────────────────
+agg = (
+    fdf.groupby(["거래처명", "제품명"])
+    .agg(총수량=("매출수량", "sum"), 총금액=("매출액", "sum"))
+    .reset_index()
+)
+agg["월평균수량"] = agg["총수량"] / months
 
-        # 2순위: ⚠️ 주의
-        if revenue >= 5_000_000 and cnt >= 5 and ratio >= 1.5:
-            if (pd.notna(trend) and trend <= -0.3) or recent6 == 0:
-                return '⚠️ 주의'
+hosp_agg = (
+    fdf.groupby("거래처명")
+    .agg(총수량=("매출수량", "sum"), 총금액=("매출액", "sum"))
+    .reset_index()
+)
+hosp_agg["월평균수량"] = hosp_agg["총수량"] / months
 
-        # 3순위: 🚀 성장
-        if on_track and pd.notna(trend) and trend >= 0.2:
-            return '🚀 성장'
-        if (on_track and prev6 >= 500_000 and
-                recent6 >= prev6 * 3 and duration >= 180):
-            return '🚀 성장'
-        if (on_track and duration >= 365 and
-                prev6 == 0 and recent6 >= 5_000_000):
-            return '🚀 성장'
+# ── 요약 지표 ────────────────────────────────────────
+c1, c2, c3, c4 = st.columns(4)
+with c1:
+    st.metric("분석 병원 수", f"{fdf['거래처명'].nunique():,}개")
+with c2:
+    st.metric("총 주문 건수", f"{len(fdf):,}건")
+with c3:
+    st.metric("총 매출수량", f"{fdf['매출수량'].sum():,.0f}개")
+with c4:
+    st.metric("총 매출액", f"₩{fdf['매출액'].sum()/1e6:,.1f}M")
 
-        # 4순위: 🟢 안심
-        if revenue >= 10_000_000 and cnt >= 10 and ratio < 2.0:
-            return '🟢 안심'
-        if revenue >= 30_000_000 and cnt >= 3 and ratio < 2.0:
-            return '🟢 안심'
+st.divider()
 
-        # 5순위: 😐 보통
-        return '😐 보통'
+# ── 메인 테이블 ──────────────────────────────────────
+st.subheader("📊 병원별 × 제품별 월평균 주문수량")
+st.caption(f"분석 기간: {start_date} ~ {end_date} ({months:.1f}개월 기준)")
 
-    features['그룹'] = features.apply(assign_group, axis=1)
+pivot = agg.pivot_table(
+    index="거래처명",
+    columns="제품명",
+    values="월평균수량",
+    fill_value=0
+)
 
-    # ── 전체 현황 ──────────────────────────────────────
-    st.subheader("📊 전체 현황")
-    st.caption(f"기준일: {ref_date.strftime('%Y-%m-%d')}")
+# 선택된 제품만, 우선순위 순서 유지
+show_cols = [p for p in selected_products if p in pivot.columns]
+pivot = pivot[show_cols]
 
-    total  = len(features)
-    groups = ['🚀 성장', '🟢 안심', '⚠️ 주의', '😐 보통', '💤 비활성화']
-    counts = {g: (features['그룹'] == g).sum() for g in groups}
+pivot = pivot.merge(
+    hosp_agg[["거래처명", "총수량", "총금액"]],
+    left_index=True, right_on="거래처명"
+).set_index("거래처명")
 
-    cols = st.columns(5)
-    for col, (label, cnt) in zip(cols, counts.items()):
-        col.metric(label, f"{cnt}개", f"{cnt/total:.0%}")
+pivot = pivot.sort_values("총수량", ascending=False)
 
-    color_map = {
-        '🚀 성장':    '#3498db',
-        '🟢 안심':    '#2ecc71',
-        '⚠️ 주의':   '#e67e22',
-        '😐 보통':    '#95a5a6',
-        '💤 비활성화':'#bdc3c7',
-    }
-    pie = pd.DataFrame({
-        '그룹': list(counts.keys()),
-        '수':   list(counts.values())
-    })
-    fig = px.pie(pie, values='수', names='그룹',
-                 color='그룹', color_discrete_map=color_map)
-    fig.update_layout(height=300, margin=dict(t=0, b=0))
-    st.plotly_chart(fig, use_container_width=True)
+def color_cell(val):
+    if isinstance(val, (int, float)):
+        if val >= 10:
+            return "background-color: #d4edda; color: #155724; font-weight: 600"
+        elif val >= 3:
+            return "background-color: #fff3cd; color: #856404;"
+        elif val > 0:
+            return "background-color: #f8f9fa; color: #495057;"
+    return ""
 
-    st.divider()
+display_pivot = pivot.copy()
+display_pivot.columns = [
+    "[총구매수량]" if c == "총수량"
+    else "[총구매액]" if c == "총금액"
+    else c
+    for c in display_pivot.columns
+]
 
-    # ── 필터 + 테이블 ──────────────────────────────────
-    col_f1, col_f2 = st.columns(2)
-    mgr_list   = ['전체'] + sorted(features['담당자'].dropna().unique().tolist())
-    group_list = ['전체'] + groups
-    selected_mgr   = col_f1.selectbox("담당자", mgr_list)
-    selected_group = col_f2.selectbox("그룹",   group_list)
+fmt2 = {}
+for col in display_pivot.columns:
+    if col == "[총구매수량]":
+        fmt2[col] = "{:,.0f}"
+    elif col == "[총구매액]":
+        fmt2[col] = "₩{:,.0f}"
+    else:
+        fmt2[col] = "{:.2f}"
 
-    result = features.copy()
-    if selected_mgr   != '전체':
-        result = result[result['담당자'] == selected_mgr]
-    if selected_group != '전체':
-        result = result[result['그룹']   == selected_group]
+styled = (
+    display_pivot.style
+    .format(fmt2)
+    .map(color_cell, subset=[c for c in display_pivot.columns if c not in ["[총구매수량]", "[총구매액]"]])
+    .set_properties(**{"text-align": "right", "font-size": "13px"})
+    .set_table_styles([
+        {"selector": "th", "props": [("background-color", "#f1f3f5"), ("font-weight", "600"), ("font-size", "12px"), ("text-align", "center")]},
+        {"selector": "td:first-child", "props": [("font-weight", "500"), ("text-align", "left"), ("min-width", "180px")]},
+    ])
+)
 
-    result = result.sort_values('누적매출액', ascending=False)
+st.dataframe(styled, use_container_width=True, height=500)
 
-    display = pd.DataFrame()
-    display['거래처명']    = result['거래처명'].values
-    display['담당자']      = result['담당자'].values
-    display['지역']        = result['지역'].values
-    display['그룹']        = result['그룹'].values
-    display['총구매횟수']  = result['총구매횟수'].values
-    display['구매제품수']  = result['구매제품수'].values
-    display['누적매출액']  = result['누적매출액'].apply(lambda x: f"{x:,.0f}원").values
-    display['회당매출']    = result['회당매출'].apply(lambda x: f"{x:,.0f}원").values
-    display['반기추세']    = result['반기추세'].apply(
-        lambda x: f"+{x:.0%}" if pd.notna(x) and x > 0
-        else (f"{x:.0%}" if pd.notna(x) else "-")).values
-    display['미구매일수']  = result['미구매일수'].values
-    display['평균구매주기']= result['평균구매주기'].apply(lambda x: f"{x:.0f}일").values
-    display['주문지체율']  = result['주문지체율'].apply(lambda x: f"{x:.1f}배").values
-    display['주요제품']    = result['주요제품'].values
+st.markdown("""
+<div style="display:flex; gap:20px; font-size:12px; margin-top:4px;">
+  <span>🟢 <b>월 10개 이상</b> — 고빈도 구매</span>
+  <span>🟡 <b>월 3~9개</b> — 중빈도 구매</span>
+  <span>⬜ <b>월 3개 미만</b> — 저빈도 구매</span>
+</div>
+""", unsafe_allow_html=True)
 
-    st.subheader(f"📋 거래처 목록 ({len(result)}개)")
-    st.dataframe(display, use_container_width=True, hide_index=True)
+st.divider()
+
+# ── 최근 1년 이탈 감지 ───────────────────────────────
+st.subheader("⚠️ 최근 1년 구매 이탈 병원")
+st.caption(f"과거에 구매했지만 최근 1년({(max_date - timedelta(days=365)).strftime('%Y-%m-%d')} 이후) 주문이 없는 병원 × 제품 조합")
+
+cutoff = max_date - timedelta(days=365)
+recent_mask   = df["매출일"].dt.date >= cutoff
+recent_buyers = set(zip(df[recent_mask]["거래처명"], df[recent_mask]["제품명"]))
+
+base_df = df.copy()
+if selected_managers:
+    base_df = base_df[base_df["담당자"].isin(selected_managers)]
+if selected_hospitals:
+    base_df = base_df[base_df["거래처명"].isin(selected_hospitals)]
+base_df = base_df[base_df["제품명"].isin(selected_products)]
+
+past_buyers = set(zip(base_df["거래처명"], base_df["제품명"]))
+churned = past_buyers - recent_buyers
+
+if churned:
+    churn_df = pd.DataFrame(list(churned), columns=["병원명", "제품명"])
+    last_order = (
+        df.groupby(["거래처명", "제품명"])["매출일"]
+        .max().reset_index()
+        .rename(columns={"거래처명": "병원명", "매출일": "마지막_주문일"})
+    )
+    churn_df = churn_df.merge(last_order, on=["병원명", "제품명"], how="left")
+    churn_df["마지막 주문일"] = churn_df["마지막_주문일"].dt.strftime("%Y-%m-%d")
+    churn_df = churn_df[["병원명", "제품명", "마지막 주문일"]].sort_values("마지막 주문일")
+    st.warning(f"총 **{len(churn_df)}개** 병원×제품 조합이 최근 1년간 주문 없음")
+    st.dataframe(churn_df, use_container_width=True, height=300)
+else:
+    st.success("✅ 최근 1년 이탈 병원이 없습니다!")
+
+st.divider()
+
+# ── TOP 20 병원 ──────────────────────────────────────
+st.subheader("🏆 TOP 20 병원 (총 구매수량 기준)")
+
+top20 = hosp_agg.nlargest(20, "총수량").copy()
+top20["월평균"] = (top20["총수량"] / months).round(1)
+
+fig2 = px.bar(
+    top20.sort_values("총수량"),
+    x="총수량", y="거래처명", orientation="h",
+    template="plotly_white", color="총수량",
+    color_continuous_scale="Blues", text="월평균",
+    labels={"총수량": "총 구매수량", "거래처명": ""}
+)
+fig2.update_traces(texttemplate="%{text}개/월", textposition="outside")
+fig2.update_layout(
+    height=600, showlegend=False,
+    coloraxis_showscale=False,
+    margin=dict(l=0, r=60, t=10, b=0)
+)
+st.plotly_chart(fig2, use_container_width=True)
