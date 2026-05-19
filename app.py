@@ -3,9 +3,9 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 
-st.set_page_config(page_title="경보제약 동물병원 주문 현황", layout="wide")
+st.set_page_config(page_title="CB LEE 동물병원 주문 현황", layout="wide")
 st.title("동물병원 주문 현황 분류")
-st.caption("경보제약 주문처")
+st.caption("동물병원 주문처")
 
 st.sidebar.markdown("""
 ### 그룹 분류 기준
